@@ -1,0 +1,269 @@
+// Unit tests: seal verifier tamper matrix (P0-1 DoD), canonical form parity
+// with the engine, result-view rollup rules (P0-5), SUT contract validation,
+// timeouts (P0-4) and rendering.
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { canonical } from '../src/lib/canonical';
+import { loadBundleKeys, verifySeal } from '../src/lib/seal';
+import { loadSutContract, EXAMPLE_SUT } from '../src/lib/sut-contract';
+import { gateResult } from '../src/lib/result-gate';
+import { checkRunName, conclusionFor, idempotencyKeyFor } from '../src/lib/render';
+import { COMMENT_MARKER, renderComment, renderSummary } from '../src/lib/summary';
+import { TIMEOUTS } from '../src/lib/console-client';
+import { CONCLUSION_MAP, rollupOf, validateResult } from '../src/vendor/result-view.mjs';
+import { canonical as engineCanonical } from '../../closed-repo-ci/engine/protocol.mjs';
+
+const run = promisify(execFile);
+const root = new URL('../..', import.meta.url).pathname;
+
+let tmp: string;
+beforeAll(async () => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'argus-unit-'));
+  // Build a real sealed bundle via the CI packer against a stub engine.
+  fs.mkdirSync(path.join(tmp, 'engine'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'engine', 'run.mjs'), 'console.log("stub engine");\n');
+  await run(
+    'node',
+    [
+      path.join(root, 'closed-repo-ci', 'ci', 'build-bundle.mjs'),
+      '--engine', path.join(tmp, 'engine'),
+      '--version', '2.1.0',
+      '--key-id', 'bundle-test-1',
+      '--out', path.join(tmp, 'bundle'),
+      '--keys-file', path.join(tmp, 'keys.json'),
+      '--dev-keys-dir', path.join(tmp, 'dev-keys'),
+    ],
+  );
+});
+afterAll(() => {
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('canonical form parity', () => {
+  it('action canonical matches engine canonical byte-for-byte', () => {
+    const obj = { b: 2, a: { d: [1, { z: null, y: true }], c: 'x' } };
+    expect(canonical(obj)).toBe(engineCanonical(obj));
+  });
+  it('is stable under key insertion order', () => {
+    expect(canonical({ b: 1, a: 2 })).toBe(canonical({ a: 2, b: 1 }));
+  });
+});
+
+describe('seal verifier (P0-1 tamper matrix)', () => {
+  const bundleDir = () => path.join(tmp, 'bundle');
+  const keys = () => loadBundleKeys(path.join(tmp, 'keys.json'));
+
+  it('accepts a well-sealed bundle', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir(), 'manifest.json'), 'utf8'));
+    expect(verifySeal(manifest, path.join(bundleDir(), 'engine.bundle.tar.gz'), keys())).toEqual({ ok: true });
+  });
+
+  it('rejects a tampered tarball (tree_sha256 mismatch)', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir(), 'manifest.json'), 'utf8'));
+    const bytes = fs.readFileSync(path.join(bundleDir(), 'engine.bundle.tar.gz'));
+    bytes[bytes.length - 1] ^= 0xff;
+    const p = path.join(tmp, 'tampered.tar.gz');
+    fs.writeFileSync(p, bytes);
+    const res = verifySeal(manifest, p, keys());
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('tree_sha256 mismatch');
+  });
+
+  it('rejects a tampered manifest field (signature invalid)', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir(), 'manifest.json'), 'utf8'));
+    const res = verifySeal({ ...manifest, engine_version: '9.9.9' }, path.join(bundleDir(), 'engine.bundle.tar.gz'), keys());
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('signature invalid');
+  });
+
+  it('rejects a foreign key_id', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir(), 'manifest.json'), 'utf8'));
+    const res = verifySeal({ ...manifest, key_id: 'bundle-rogue-999' }, path.join(bundleDir(), 'engine.bundle.tar.gz'), keys());
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('unknown key_id');
+  });
+
+  it('rejects an unsupported manifest schema', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir(), 'manifest.json'), 'utf8'));
+    const res = verifySeal({ ...manifest, schema: 'argus.bundle.vX' }, path.join(bundleDir(), 'engine.bundle.tar.gz'), keys());
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('unsupported manifest schema');
+  });
+});
+
+describe('result-view rollup rules (P0-5)', () => {
+  const evidenceDir = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'argus-rv-'));
+    fs.mkdirSync(path.join(dir, 'ledgers', 'x402-core'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ledgers', 'x402-core', 's1.jsonl'), '{"event":"verdict"}\n');
+    return dir;
+  };
+
+  const validResult = (cwd: string) => ({
+    schema: 'argus.result.v0',
+    mode: 'ci-local',
+    battery: 'x402-core',
+    engine_version: '2.1.0',
+    bundle: { key_id: 'k', tree_sha256: 'x' },
+    started_at: new Date().toISOString(),
+    duration_ms: 10,
+    rollup: 'DOCUMENTED',
+    verdicts: [
+      { session_id: 'bc-01', family: 'BC', name: 'challenge-gate', verdict: 'PASS', refusal: null, note: null, duration_ms: 4, evidence: 'ledgers/x402-core/s1.jsonl' },
+      { session_id: 'bc-03', family: 'BC', name: 'replay-refused', verdict: 'DOCUMENTED', refusal: { code: 'nonce_reused' }, note: null, duration_ms: 6, evidence: 'ledgers/x402-core/s1.jsonl' },
+    ],
+    ledgers: ['ledgers/x402-core/s1.jsonl'],
+    seal: { eligible: true, sealed: false },
+  });
+
+  it('accepts a valid ci-local result', () => {
+    const cwd = evidenceDir();
+    const res = validateResult(validResult(cwd), { cwd });
+    expect(res.ok).toBe(true);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('rejects rollup mismatch', () => {
+    const cwd = evidenceDir();
+    const res = validateResult({ ...validResult(cwd), rollup: 'PASS' }, { cwd });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => String(e).includes('rollup'))).toBe(true);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('rejects a sealed ci-local run', () => {
+    const cwd = evidenceDir();
+    const res = validateResult({ ...validResult(cwd), seal: { eligible: true, sealed: true } }, { cwd });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => String(e).includes('never be sealed'))).toBe(true);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('requires ledger evidence paths in ci-local', () => {
+    const cwd = evidenceDir();
+    const res = validateResult({ ...validResult(cwd), ledgers: [] }, { cwd });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => String(e).includes('evidence'))).toBe(true);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('rejects DOCUMENTED without a known refusal code', () => {
+    const cwd = evidenceDir();
+    const r = validResult(cwd);
+    (r.verdicts[1] as { refusal: unknown }).refusal = { code: 'because' };
+    const res = validateResult(r, { cwd });
+    expect(res.ok).toBe(false);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('rejects an unknown verdict and computes rollup as max severity', () => {
+    expect(rollupOf([{ verdict: 'PASS' }, { verdict: 'DOCUMENTED' }])).toBe('DOCUMENTED');
+    expect(rollupOf([{ verdict: 'PASS' }, { verdict: 'FAIL' }, { verdict: 'DOCUMENTED' }])).toBe('FAIL');
+    expect(rollupOf([{ verdict: 'HARNESS_ERROR' }, { verdict: 'FAIL' }])).toBe('HARNESS_ERROR');
+    expect(CONCLUSION_MAP.PASS).toBe('success');
+    expect(CONCLUSION_MAP.FAIL).toBe('failure');
+    expect(CONCLUSION_MAP.DOCUMENTED).toBe('neutral');
+    expect(CONCLUSION_MAP.HARNESS_ERROR).toBe('action_required');
+  });
+
+  it('gates via the typed wrapper', () => {
+    const cwd = evidenceDir();
+    const gate = gateResult(validResult(cwd) as never, { cwd });
+    expect(gate.ok).toBe(true);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+});
+
+describe('SUT contract validation', () => {
+  it('accepts the spec example', () => {
+    const p = path.join(tmp, 'sut-ok.json');
+    fs.writeFileSync(p, EXAMPLE_SUT);
+    const res = loadSutContract(p);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.battery).toBe('x402-core');
+      expect(res.role).toBe('seller');
+      expect(res.rail).toBe('local');
+    }
+  });
+
+  it('flags a missing file as onboarding', () => {
+    const res = loadSutContract(path.join(tmp, 'nope.json'));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.missing).toBe(true);
+  });
+
+  it('rejects bad schema, bad role and impossible timeouts', () => {
+    const cases = [
+      { schema: 'argus.sut.v9', start: 'x', ready: { url: 'http://127.0.0.1:1/health', timeout_ms: 5000 } },
+      { schema: 'argus.sut.v0', start: 'x', ready: { url: 'http://127.0.0.1:1/health', timeout_ms: 5000 }, role: 'unicorn' },
+      { schema: 'argus.sut.v0', start: 'x', ready: { url: 'http://127.0.0.1:1/health', timeout_ms: 10 } },
+      { schema: 'argus.sut.v0', start: 'x', ready: { url: 'http://127.0.0.1:1/health', timeout_ms: 5000 }, role: 'client' },
+    ];
+    for (const [i, c] of cases.entries()) {
+      const p = path.join(tmp, `sut-bad-${i}.json`);
+      fs.writeFileSync(p, JSON.stringify(c));
+      const res = loadSutContract(p);
+      expect(res.ok).toBe(false);
+    }
+  });
+});
+
+describe('P0-4 timeouts', () => {
+  it('pins console/bundle and GitHub timeouts', () => {
+    expect(TIMEOUTS.bundleMetaMs).toBe(30_000);
+    expect(TIMEOUTS.bundleDownloadMs).toBe(120_000);
+    expect(TIMEOUTS.registerRunMs).toBe(30_000);
+    expect(TIMEOUTS.githubApiMs).toBe(10_000);
+  });
+});
+
+describe('rendering and naming', () => {
+  const sessions = [
+    { session_id: 'bc-01', family: 'BC', name: 'challenge-gate', verdict: 'PASS', refusal: null, duration_ms: 4 },
+    { session_id: 'bc-03', family: 'BC', name: 'replay-refused', verdict: 'DOCUMENTED', refusal: { code: 'nonce_reused' }, duration_ms: 6 },
+  ] as never as Parameters<typeof renderSummary>[0]['sessions'];
+
+  it('summary carries run link, ci-local line, seal policy and footer', () => {
+    const md = renderSummary({
+      battery: 'x402-core',
+      rollup: 'DOCUMENTED',
+      engineVersion: '2.1.0',
+      keyId: 'bundle-test-1',
+      runUrl: 'https://argus-lab.tech/runs/r-123',
+      sessions,
+      durationMs: 42,
+    });
+    expect(md).toContain('https://argus-lab.tech/runs/r-123');
+    expect(md).toContain('ci-local run — evidence: ledgers attached; not a registry seal');
+    expect(md).toContain('Seal-eligible: candidate');
+    expect(md).toContain('argus-lab.tech');
+    expect(md).toContain('| bc-03 replay-refused |');
+  });
+
+  it('comment carries exactly one marker and the session table', () => {
+    const body = renderComment({
+      battery: 'x402-core',
+      rollup: 'DOCUMENTED',
+      engineVersion: '2.1.0',
+      keyId: 'k',
+      sessions,
+    });
+    expect(body.split(COMMENT_MARKER).length - 1).toBe(1);
+    expect(body).toContain('| Session |');
+  });
+
+  it('check-run name matches the billboard contract (P1-2)', () => {
+    expect(checkRunName('x402-core')).toBe('argus-battery (x402-core) by Argus Lab');
+  });
+
+  it('conclusion mapping and idempotency key', () => {
+    expect(conclusionFor('DOCUMENTED')).toBe('neutral');
+    expect(conclusionFor('HARNESS_ERROR')).toBe('action_required');
+    expect(idempotencyKeyFor({ repo: 'a/b', commit: 'c', battery: 'x402-core' } as never)).toBe('a/b|c|x402-core');
+  });
+});

@@ -1,38 +1,48 @@
-name: 'Argus battery'
-# Marketplace metadata: description must stay under 125 characters.
-# Full conclusion mapping (PASS -> success, UNKNOWN -> neutral, FAIL ->
-# failure, billing/rig/contract violations -> action_required) and exit
-# codes live in README.md and in docs/ci/result-contract-v0.md +
-# docs/ci/api-contract-v0.md of the lab repo.
-description: >-
-  Runs the Argus x402 battery against this commit and records the verdict as
-  a check run.
-
-inputs:
-  api-key:
-    description: 'Argus console api-key - pass secrets.ARGUS_API_KEY (workflow secret), never inline'
-    required: true
-  battery-id:
-    description: 'Battery to run'
-    required: false
-    default: 'x402-core'
-  console-url:
-    description: 'Argus console base URL'
-    required: false
-    default: 'https://console.argus-lab.tech'
-
-runs:
-  using: composite
-  steps:
-    - id: argus
-      shell: bash
-      env:
-        INPUT_API_KEY: ${{ inputs.api-key }}
-        INPUT_BATTERY_ID: ${{ inputs.battery-id }}
-        INPUT_CONSOLE_URL: ${{ inputs.console-url }}
-        GITHUB_TOKEN: ${{ github.token }}
-      run: node "$GITHUB_ACTION_PATH/run.mjs"
-
+name: 'Argus Action'
+description: 'Runs the real Argus engine (sealed bundle) against your SUT in CI: real protocol sessions, real refusal points.'
 branding:
   icon: 'shield'
   color: 'blue'
+inputs:
+  console-url:
+    description: 'Argus console base URL'
+    required: true
+  console-api-key:
+    description: 'Argus API key (one key, one balance)'
+    required: true
+  battery:
+    description: 'Battery id; defaults to the battery declared in argus.sut.json'
+    required: false
+    default: ''
+  sut-contract-path:
+    description: 'Path to the SUT contract'
+    required: false
+    default: 'argus.sut.json'
+  bundle-keys-path:
+    description: 'Path to the lab bundle public keys (sync from the lab repo)'
+    required: false
+    default: 'keys/bundle-keys.json'
+  public-run:
+    description: 'Publish the run report page (default: private)'
+    required: false
+    default: 'false'
+  comment:
+    description: 'Post/update a single PR comment with the session table (opt-in)'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'GitHub token for the check-run billboard and the opt-in comment'
+    required: false
+    default: ''
+outputs:
+  run-id:
+    description: 'Argus run id'
+  run-url:
+    description: 'Run report URL'
+  rollup:
+    description: 'PASS / FAIL / DOCUMENTED / HARNESS_ERROR'
+  engine-version:
+    description: 'Engine semver from the sealed bundle'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
