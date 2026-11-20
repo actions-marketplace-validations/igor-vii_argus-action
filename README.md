@@ -80,7 +80,7 @@ payment is always `FAIL`.
   "schema": "argus.sut.v0",
   "start": "npm run start:sut",
   "ready": { "url": "http://127.0.0.1:5071/health", "timeout_ms": 30000 },
-  "env": { "PORT": "5071", "FACILITATOR_URL": "http://127.0.0.1:5060" },
+  "env": { "PORT": "5071", "FACILITATOR_URL": "http://127.0.0.1:5070" },
   "battery": "x402-core"
 }
 ```
