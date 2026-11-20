@@ -16,6 +16,7 @@ import { COMMENT_MARKER, renderComment, renderSummary } from '../src/lib/summary
 import { TIMEOUTS } from '../src/lib/console-client';
 import { CONCLUSION_MAP, rollupOf, validateResult } from '../src/vendor/result-view.mjs';
 import { canonical as engineCanonical } from '../../closed-repo-ci/engine/protocol.mjs';
+import { createHash } from 'node:crypto';
 
 const run = promisify(execFile);
 const root = new URL('../..', import.meta.url).pathname;
@@ -264,6 +265,41 @@ describe('rendering and naming', () => {
   it('conclusion mapping and idempotency key', () => {
     expect(conclusionFor('DOCUMENTED')).toBe('neutral');
     expect(conclusionFor('HARNESS_ERROR')).toBe('action_required');
-    expect(idempotencyKeyFor({ repo: 'a/b', commit: 'c', battery: 'x402-core' } as never)).toBe('a/b|c|x402-core');
+    expect(idempotencyKeyFor({ repo: 'a/b', commit: 'c', battery: 'x402-core' } as never)).toBe(
+      createHash('sha256').update('argus.idem.v1:c:x402-core').digest('hex'),
+    );
+  });
+
+  it('P1-6: drift vs baseline marks worse/improved and flaky after 3 flaps', async () => {
+    const { deltaOf, flakyIdsOf, driftAnnotations, verdictMapOf } = await import('../src/lib/delta');
+    const sessions = [
+      { session_id: 'bc-01', name: 's1', verdict: 'FAIL', refusal: null, duration_ms: 1 },
+      { session_id: 'bc-02', name: 's2', verdict: 'PASS', refusal: null, duration_ms: 1 },
+    ] as import('../src/lib/types').SessionVerdict[];
+    const baseline = { 'bc-01': 'PASS', 'bc-02': 'DOCUMENTED' };
+    const d = deltaOf(sessions, baseline);
+    expect(d.comparable).toBe(true);
+    expect(d.drift).toHaveLength(2);
+    expect(d.drift.find((x) => x.id === 'bc-01')?.worse).toBe(true);
+    expect(d.drift.find((x) => x.id === 'bc-02')?.worse).toBe(false);
+    // history: PASS → FAIL → PASS → FAIL = 3 changes → flaky
+    const history = [
+      { commit: 'a', verdicts: { 'bc-01': 'PASS' } },
+      { commit: 'b', verdicts: { 'bc-01': 'FAIL' } },
+      { commit: 'c', verdicts: { 'bc-01': 'PASS' } },
+    ];
+    const flaky = flakyIdsOf(history, sessions);
+    expect(flaky.has('bc-01')).toBe(true);
+    expect(flaky.has('bc-02')).toBe(false);
+    const anns = driftAnnotations(d.drift, flaky);
+    expect(anns.some((a) => a.title.startsWith('drift: bc-01') && a.level === 'warning')).toBe(true);
+    expect(anns.some((a) => a.title === 'flaky: bc-01')).toBe(false); // drift annotation already covers bc-01 with flaky suffix
+  });
+
+  it('P1-6: no baseline -> not comparable, empty drift', async () => {
+    const { deltaOf } = await import('../src/lib/delta');
+    const d = deltaOf([{ session_id: 'x', name: 'x', verdict: 'PASS', refusal: null, duration_ms: 1 }], null);
+    expect(d.comparable).toBe(false);
+    expect(d.drift).toHaveLength(0);
   });
 });

@@ -38297,13 +38297,13 @@ var require_sha256 = __commonJS({
       computeSha256Hmac: () => computeSha256Hmac2
     });
     module2.exports = __toCommonJS2(sha256_exports);
-    var import_node_crypto3 = require("node:crypto");
+    var import_node_crypto4 = require("node:crypto");
     async function computeSha256Hmac2(key, stringToSign, encoding) {
       const decodedKey = Buffer.from(key, "base64");
-      return (0, import_node_crypto3.createHmac)("sha256", decodedKey).update(stringToSign).digest(encoding);
+      return (0, import_node_crypto4.createHmac)("sha256", decodedKey).update(stringToSign).digest(encoding);
     }
     async function computeSha256Hash2(content, encoding) {
-      return (0, import_node_crypto3.createHash)("sha256").update(content).digest(encoding);
+      return (0, import_node_crypto4.createHash)("sha256").update(content).digest(encoding);
     }
   }
 });
@@ -50918,7 +50918,7 @@ var require_StorageSharedKeyCredential = __commonJS({
       StorageSharedKeyCredential: () => StorageSharedKeyCredential2
     });
     module2.exports = __toCommonJS2(StorageSharedKeyCredential_exports);
-    var import_node_crypto3 = require("node:crypto");
+    var import_node_crypto4 = require("node:crypto");
     var import_StorageSharedKeyCredentialPolicy = require_StorageSharedKeyCredentialPolicy();
     var import_Credential = require_Credential();
     var StorageSharedKeyCredential2 = class extends import_Credential.Credential {
@@ -50955,7 +50955,7 @@ var require_StorageSharedKeyCredential = __commonJS({
        * @param stringToSign -
        */
       computeHMACSHA256(stringToSign) {
-        return (0, import_node_crypto3.createHmac)("sha256", this.accountKey).update(stringToSign, "utf8").digest("base64");
+        return (0, import_node_crypto4.createHmac)("sha256", this.accountKey).update(stringToSign, "utf8").digest("base64");
       }
     };
   }
@@ -51595,7 +51595,7 @@ var require_StorageSharedKeyCredentialPolicyV2 = __commonJS({
       storageSharedKeyCredentialPolicyName: () => storageSharedKeyCredentialPolicyName
     });
     module2.exports = __toCommonJS2(StorageSharedKeyCredentialPolicyV2_exports);
-    var import_node_crypto3 = require("node:crypto");
+    var import_node_crypto4 = require("node:crypto");
     var import_constants3 = require_constants8();
     var import_utils_common = require_utils_common();
     var import_SharedKeyComparator = require_SharedKeyComparator();
@@ -51620,7 +51620,7 @@ var require_StorageSharedKeyCredentialPolicyV2 = __commonJS({
           getHeaderValueToSign(request, import_constants3.HeaderConstants.IF_UNMODIFIED_SINCE),
           getHeaderValueToSign(request, import_constants3.HeaderConstants.RANGE)
         ].join("\n") + "\n" + getCanonicalizedHeadersString(request) + getCanonicalizedResourceString(request);
-        const signature = (0, import_node_crypto3.createHmac)("sha256", options.accountKey).update(stringToSign, "utf8").digest("base64");
+        const signature = (0, import_node_crypto4.createHmac)("sha256", options.accountKey).update(stringToSign, "utf8").digest("base64");
         request.headers.set(
           import_constants3.HeaderConstants.AUTHORIZATION,
           `SharedKey ${options.accountName}:${signature}`
@@ -51814,7 +51814,7 @@ var require_UserDelegationKeyCredential = __commonJS({
       UserDelegationKeyCredential: () => UserDelegationKeyCredential
     });
     module2.exports = __toCommonJS2(UserDelegationKeyCredential_exports);
-    var import_node_crypto3 = require("node:crypto");
+    var import_node_crypto4 = require("node:crypto");
     var UserDelegationKeyCredential = class {
       /**
        * Azure Storage account name; readonly.
@@ -51844,7 +51844,7 @@ var require_UserDelegationKeyCredential = __commonJS({
        * @param stringToSign -
        */
       computeHMACSHA256(stringToSign) {
-        return (0, import_node_crypto3.createHmac)("sha256", this.key).update(stringToSign, "utf8").digest("base64");
+        return (0, import_node_crypto4.createHmac)("sha256", this.key).update(stringToSign, "utf8").digest("base64");
       }
     };
   }
@@ -149137,6 +149137,7 @@ function gateResult(result, opts) {
 }
 
 // src/lib/render.ts
+var import_node_crypto3 = require("node:crypto");
 function conclusionFor(rollup) {
   return CONCLUSION_MAP[rollup] ?? "action_required";
 }
@@ -149169,13 +149170,92 @@ function checkRunName(battery) {
   return `argus-battery (${battery}) by Argus Lab`;
 }
 function idempotencyKeyFor(inputs) {
-  return `${inputs.repo}|${inputs.commit}|${inputs.battery ?? ""}`;
+  return (0, import_node_crypto3.createHash)("sha256").update(`argus.idem.v1:${inputs.commit}:${inputs.battery ?? ""}`).digest("hex");
 }
 function evidenceFiles(result) {
   const paths = /* @__PURE__ */ new Set();
   for (const v2 of result.verdicts ?? []) if (v2.evidence) paths.add(v2.evidence);
   for (const l of result.ledgers ?? []) paths.add(l);
   return [...paths];
+}
+
+// src/lib/delta.ts
+var HISTORY_LIMIT = 20;
+var FLAKY_THRESHOLD = 3;
+function verdictMapOf(verdicts) {
+  const map = {};
+  for (const v2 of verdicts ?? []) if (v2?.session_id) map[v2.session_id] = v2.verdict;
+  return map;
+}
+var SEVERITY2 = { PASS: 0, DOCUMENTED: 1, UNKNOWN: 1, HOLD: 1, FAIL: 2, HARNESS_ERROR: 2 };
+function deltaOf(current, baseline) {
+  const now = verdictMapOf(current);
+  if (!baseline || Object.keys(baseline).length === 0) return { comparable: false, drift: [] };
+  const drift = [];
+  for (const v2 of current ?? []) {
+    const before = baseline[v2.session_id];
+    if (before && before !== v2.verdict) {
+      drift.push({
+        id: v2.session_id,
+        name: v2.name ?? "",
+        from: before,
+        to: v2.verdict,
+        worse: (SEVERITY2[v2.verdict] ?? 1) > (SEVERITY2[before] ?? 1)
+      });
+    }
+  }
+  return { comparable: true, drift };
+}
+function flakyIdsOf(history, current) {
+  const seq = history.map((h) => h.verdicts).filter(Boolean);
+  seq.push(verdictMapOf(current));
+  const flaky = /* @__PURE__ */ new Set();
+  const ids = /* @__PURE__ */ new Set();
+  for (const m2 of seq) for (const id of Object.keys(m2)) ids.add(id);
+  for (const id of ids) {
+    let changes = 0;
+    let prev;
+    for (const m2 of seq) {
+      const v2 = m2[id];
+      if (v2 === void 0) continue;
+      if (prev !== void 0 && prev !== v2) changes++;
+      prev = v2;
+    }
+    if (changes >= FLAKY_THRESHOLD) flaky.add(id);
+  }
+  return flaky;
+}
+function driftAnnotations(drift, flaky) {
+  const out = [];
+  for (const d of drift) {
+    out.push({
+      level: d.worse ? "warning" : "notice",
+      title: `drift: ${d.id}`,
+      message: `${d.id} ${d.name}: ${d.from} \u2192 ${d.to}${d.worse ? " (worse)" : " (improved)"}${flaky.has(d.id) ? " \xB7 flaky" : ""}`
+    });
+  }
+  for (const id of flaky) {
+    if (drift.some((d) => d.id === id)) continue;
+    out.push({ level: "notice", title: `flaky: ${id}`, message: `${id} flapped >= ${FLAKY_THRESHOLD} times across recorded runs` });
+  }
+  return out;
+}
+function driftSummaryLines(comparable, drift, flaky, baselineLabel) {
+  if (!comparable) return [];
+  const lines = ["", `### Drift vs ${baselineLabel}`, ""];
+  if (!drift.length && !flaky.size) {
+    lines.push("No verdict changes vs baseline.");
+    return lines;
+  }
+  if (drift.length) {
+    lines.push("| Session | Verdict change | Direction |", "| --- | --- | --- |");
+    for (const d of drift) {
+      lines.push(`| ${d.id} ${d.name} | ${d.from} \u2192 ${d.to} | ${d.worse ? "worse" : "improved"}${flaky.has(d.id) ? " \xB7 flaky" : ""} |`);
+    }
+  }
+  const rest = [...flaky].filter((id) => !drift.some((d) => d.id === id));
+  if (rest.length) lines.push(`Flaky (no change in this run): ${rest.join(", ")}`);
+  return lines;
 }
 
 // src/lib/summary.ts
@@ -149521,8 +149601,8 @@ async function runArgus(ports) {
       ports.summary.add(renderBillingSummary(err.body));
       await ports.summary.write();
       await ports.artifacts.upload([import_node_path11.default.join(paths.workspace, "argus-result.json"), ...evidenceFiles(result).map((p2) => import_node_path11.default.resolve(paths.workspace, p2))], paths.workspace);
-      await ports.conclusion("failure");
-      return { conclusion: "failure", rollup: result.rollup, engineVersion: manifest.engine_version };
+      await ports.conclusion("action_required");
+      return { conclusion: "action_required", rollup: result.rollup, engineVersion: manifest.engine_version };
     }
     ports.log(`run registration failed: ${String(err)}`);
     ports.annotate({ level: "error", title: "run registration", message: String(err) });
@@ -149531,7 +149611,45 @@ async function runArgus(ports) {
   result.ci_local_notice = CI_LOCAL_NOTICE2;
   const resultPath = import_node_path11.default.join(paths.workspace, "argus-result.json");
   import_node_fs11.default.writeFileSync(resultPath, JSON.stringify(result, null, 2));
-  for (const a of sessionAnnotations(result.verdicts, runUrl)) ports.annotate(a);
+  let driftExtras = [];
+  let driftLines = [];
+  try {
+    const baselinePath = inputs.baselineFixture ? import_node_path11.default.resolve(paths.repoRoot, inputs.baselineFixture) : "";
+    let baselineVerdicts = null;
+    if (baselinePath && import_node_fs11.default.existsSync(baselinePath)) {
+      const baseline = JSON.parse(import_node_fs11.default.readFileSync(baselinePath, "utf8"));
+      baselineVerdicts = verdictMapOf(baseline.verdicts);
+    }
+    const comparable = baselineVerdicts !== null;
+    let drift = [];
+    if (comparable) {
+      drift = deltaOf(result.verdicts, baselineVerdicts).drift;
+    }
+    const historyKey = `argus-verdicts-${inputs.repo}-${battery}`;
+    let history = [];
+    if (ports.history) {
+      try {
+        history = await ports.history.load(historyKey) ?? [];
+      } catch (e) {
+        ports.log(`verdict history load skipped: ${String(e)}`);
+      }
+    }
+    const flaky = flakyIdsOf(history, result.verdicts);
+    if (comparable) driftExtras = driftAnnotations(drift, flaky);
+    else if (flaky.size) driftExtras = driftAnnotations([], flaky);
+    driftLines = driftSummaryLines(comparable, drift, flaky, inputs.baselineFixture ?? "baseline");
+    if (ports.history && result.verdicts?.length) {
+      try {
+        const next = [...history, { commit: inputs.commit, verdicts: verdictMapOf(result.verdicts) }].slice(-HISTORY_LIMIT);
+        await ports.history.save(historyKey, next);
+      } catch (e) {
+        ports.log(`verdict history save skipped: ${String(e)}`);
+      }
+    }
+  } catch (e) {
+    ports.log(`drift/flaky skipped: ${String(e)}`);
+  }
+  for (const a of [...sessionAnnotations(result.verdicts, runUrl), ...driftExtras]) ports.annotate(a);
   ports.summary.add(
     renderSummary({
       battery,
@@ -149542,7 +149660,8 @@ async function runArgus(ports) {
       runUrl,
       sessions: result.verdicts,
       durationMs: result.duration_ms
-    })
+    }) + (driftLines.length ? `
+${driftLines.join("\n")}` : "")
   );
   await ports.summary.write();
   try {
@@ -149570,7 +149689,7 @@ async function runArgus(ports) {
           sessions: result.verdicts
         }),
         detailsUrl: runUrl,
-        annotations: sessionAnnotations(result.verdicts, runUrl).slice(0, 50)
+        annotations: [...sessionAnnotations(result.verdicts, runUrl), ...driftExtras].slice(0, 50)
       });
     } catch (err) {
       ports.log(`check run skipped: ${String(err)}`);
@@ -149613,9 +149732,13 @@ function readInputs() {
     consoleApiKey: core.getInput("console-api-key", { required: true }),
     battery: core.getInput("battery") || void 0,
     sutContractPath: core.getInput("sut-contract-path") || "argus.sut.json",
-    bundleKeysPath: core.getInput("bundle-keys-path") || "keys/bundle-keys.json",
+    // Trust anchor: bundle public keys are pinned IN the action (immutable per
+    // action version). A user-repo keys file would let a PR swap the trust
+    // root and verify attacker-signed bundles — never ship keys from the repo.
+    bundleKeysPath: core.getInput("bundle-keys-path") || import_node_path12.default.join(__dirname, "..", "keys", "bundle-keys.json"),
     publicRun: (core.getInput("public-run") || "false").toLowerCase() === "true",
     comment: (core.getInput("comment") || "false").toLowerCase() === "true",
+    baselineFixture: core.getInput("baseline-fixture") || void 0,
     repo: `${github.context.repo.owner}/${github.context.repo.repo}`,
     commit: github.context.sha
   };
@@ -149708,6 +149831,7 @@ function buildGithubPorts(inputs) {
     outputs: { set: (name, value) => core.setOutput(name, value) },
     conclusion: async (c) => {
       if (c === "failure") core.setFailed("Argus verdict: FAIL");
+      else if (c === "action_required") core.setFailed("Argus: action_required \u2014 the agent was not measured (billing/rig/contract); see the Argus check run");
       else core.notice(`Argus conclusion: ${c} (authoritative conclusion lives on the Argus check run)`);
     },
     checks,
@@ -149727,6 +149851,25 @@ function buildGithubPorts(inputs) {
       },
       save: async (key, targetDir) => {
         await cache.saveCache([targetDir], key);
+      }
+    },
+    history: {
+      load: async (key) => {
+        const file = import_node_path12.default.join(process.env.GITHUB_WORKSPACE || process.cwd(), "argus-run", "verdict-history.json");
+        const hit = await cache.restoreCache([file], `${key}-primary`, [key]);
+        if (!hit) return null;
+        try {
+          return JSON.parse(import_node_fs12.default.readFileSync(file, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      save: async (key, value) => {
+        const file = import_node_path12.default.join(process.env.GITHUB_WORKSPACE || process.cwd(), "argus-run", "verdict-history.json");
+        import_node_fs12.default.mkdirSync(import_node_path12.default.dirname(file), { recursive: true });
+        import_node_fs12.default.writeFileSync(file, JSON.stringify(value));
+        const runId = github.context.runId ? String(github.context.runId) : String(Date.now());
+        await cache.saveCache([file], `${key}-${runId}`);
       }
     }
   };

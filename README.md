@@ -63,9 +63,10 @@ payment is always `FAIL`.
 | `console-api-key` | — (required) | Argus API key (one key, one balance) |
 | `battery` | from `argus.sut.json` | battery id override |
 | `sut-contract-path` | `argus.sut.json` | SUT contract location |
-| `bundle-keys-path` | `keys/bundle-keys.json` | lab bundle public keys (sync from the lab repo) |
+| `bundle-keys-path` | bundled with the action | override for bundle public keys — **never from the SUT repo** (see Security model) |
 | `public-run` | `false` | publish the `/runs/<id>` report page |
 | `comment` | `false` | post/update a single PR comment with the session table |
+| `baseline-fixture` | — | repo-relative path to a previous `argus-result.json` — enables drift annotations (P1-6) |
 | `github-token` | `github.token` | token for the check-run billboard and the comment |
 
 ### Outputs
@@ -99,8 +100,19 @@ ci-local runs with a clear HARNESS_ERROR until the on-chain CI wiring lands),
 | `HARNESS_ERROR` | action_required | error |
 
 `rollup` = max severity. The job exit status approximates the mapping
-(failure only on `FAIL`); the authoritative conclusion lives on the Argus
-check run.
+(failure on `FAIL`); the authoritative conclusion lives on the Argus
+check run. Billing/rig/contract problems (402, unreachable console, broken
+seal, missing contract) conclude `action_required` — the agent was not
+measured, so it must not read as a red agent failure — while the workflow
+step still exits non-zero so the pipeline does not pretend all is fine.
+
+## Drift and flaky (P1-6)
+
+Pass `baseline-fixture: path/to/previous-argus-result.json` and the action
+annotates every session whose verdict changed vs that run (`drift: bc-03
+PASS → FAIL (worse)`). Separately, the action keeps the last 20 verdict
+maps per repo+battery in the Actions cache: a session that flapped ≥ 3 times
+is annotated `flaky` and gets a `flaky` marker in the summary drift table.
 
 ## Security model
 
@@ -111,18 +123,22 @@ check run.
 | mode | manual, one at a time | automatic, every build |
 | leak | catastrophic (registry forgery) | rotate, registry unaffected |
 
-The action never sees any private key: it verifies bundles against the lab
-public keys (`keys/bundle-keys.json`, synced from the lab repo via PR).
-`manifest.key_id` selects the verification key. Seal policy: the registry is
-appended only with manually reviewed, offline-signed live runs — CI and
-console runs are never sealed automatically; `seal-eligible` marks a
-candidate, not a seal.
+The action never sees any private key. **The bundle public keys are pinned
+inside the action** (`keys/bundle-keys.json`, committed at the action version)
+and verified locally. A keys file from the SUT repo must never be used as the
+trust root: an untrusted PR could swap it and verify an attacker-signed bundle
+on your runner. `manifest.key_id` selects the verification key. Seal policy:
+the registry is appended only with manually reviewed, offline-signed live
+runs — CI and console runs are never sealed automatically; `seal-eligible`
+marks a candidate, not a seal.
 
 ## Billing
 
 - 3 welcome runs free (CI + console share one balance — one key, one balance).
 - $3 per core battery run; $29 per 30-run package (credits do not expire).
-- Idempotent debits: one commit + one battery = one charge, restarts are free.
+- Idempotent debits: `idempotency_key = sha256("argus.idem.v1:" + commit + ":" + battery)`
+  per api-contract-v0 — one commit + one battery = one charge per account,
+  restarts are free; replays are scoped per-account.
 - Zero balance → `402` + explicit top-up messaging; overdraft floor −3 per
   contract. No silent charges: the first paid run shows the price and balance.
 
@@ -137,7 +153,7 @@ and other GitHub calls 10 s.
 npm ci
 npm run build          # esbuild -> dist/index.js (committed)
 npm run typecheck
-npm test               # unit (22) + e2e (12 scenarios A–J)
+npm test               # unit (24) + e2e (12 scenarios A–J)
 npm run check:language # zero mentions of the retired mode in live paths
 ```
 

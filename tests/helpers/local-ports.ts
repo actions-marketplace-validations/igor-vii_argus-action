@@ -83,6 +83,7 @@ export function buildLocalPorts(opts: {
       },
     },
     cache: null,
+    history: null,
   };
   return { ports, capture };
 }

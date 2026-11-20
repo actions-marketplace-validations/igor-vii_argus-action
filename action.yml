@@ -19,9 +19,9 @@ inputs:
     required: false
     default: 'argus.sut.json'
   bundle-keys-path:
-    description: 'Path to the lab bundle public keys (sync from the lab repo)'
+    description: 'Override for bundle public keys; by default the keys pinned in this action are used (never from the SUT repo)'
     required: false
-    default: 'keys/bundle-keys.json'
+    default: ''
   public-run:
     description: 'Publish the run report page (default: private)'
     required: false
@@ -30,6 +30,10 @@ inputs:
     description: 'Post/update a single PR comment with the session table (opt-in)'
     required: false
     default: 'false'
+  baseline-fixture:
+    description: 'Path (repo-relative) to a previous argus-result.json — enables drift annotations (P1-6)'
+    required: false
+    default: ''
   github-token:
     description: 'GitHub token for the check-run billboard and the opt-in comment'
     required: false

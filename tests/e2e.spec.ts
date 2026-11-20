@@ -280,11 +280,11 @@ describe('e2e', () => {
     expect(state.keys['k-idem'].welcome_remaining).toBe(0);
   });
 
-  it('E: zero balance -> 402, top-up messaging, conclusion failure', async () => {
+  it('E: zero balance -> 402, top-up messaging, conclusion action_required', async () => {
     const f = await makeSellerFixture();
     const { ports, capture } = portsFor(f.repo, 'k-empty');
     const outcome = await runArgus(ports);
-    expect(outcome.conclusion).toBe('failure');
+    expect(outcome.conclusion).toBe('action_required');
     const summary = capture.summaries.join('\n');
     expect(summary).toContain('insufficient credits');
     expect(summary).toContain('/topup');

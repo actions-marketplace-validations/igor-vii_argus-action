@@ -24,9 +24,14 @@ export function readInputs(): ActionInputs {
     consoleApiKey: core.getInput('console-api-key', { required: true }),
     battery: core.getInput('battery') || undefined,
     sutContractPath: core.getInput('sut-contract-path') || 'argus.sut.json',
-    bundleKeysPath: core.getInput('bundle-keys-path') || 'keys/bundle-keys.json',
+    // Trust anchor: bundle public keys are pinned IN the action (immutable per
+    // action version). A user-repo keys file would let a PR swap the trust
+    // root and verify attacker-signed bundles — never ship keys from the repo.
+    bundleKeysPath:
+      core.getInput('bundle-keys-path') || path.join(__dirname, '..', 'keys', 'bundle-keys.json'),
     publicRun: (core.getInput('public-run') || 'false').toLowerCase() === 'true',
     comment: (core.getInput('comment') || 'false').toLowerCase() === 'true',
+    baselineFixture: core.getInput('baseline-fixture') || undefined,
     repo: `${github.context.repo.owner}/${github.context.repo.repo}`,
     commit: github.context.sha,
   };
@@ -134,7 +139,11 @@ export function buildGithubPorts(inputs: ActionInputs): Ports {
     },
     outputs: { set: (name, value) => core.setOutput(name, value) },
     conclusion: async (c) => {
+      // v1 contract: the workflow step exits non-zero for everything except
+      // PASS/UNKNOWN-equivalent conclusions; the authoritative conclusion
+      // lives on the Argus check run.
       if (c === 'failure') core.setFailed('Argus verdict: FAIL');
+      else if (c === 'action_required') core.setFailed('Argus: action_required — the agent was not measured (billing/rig/contract); see the Argus check run');
       else core.notice(`Argus conclusion: ${c} (authoritative conclusion lives on the Argus check run)`);
     },
     checks,
@@ -154,6 +163,27 @@ export function buildGithubPorts(inputs: ActionInputs): Ports {
       },
       save: async (key, targetDir) => {
         await cache.saveCache([targetDir], key);
+      },
+    },
+    history: {
+      load: async (key) => {
+        const file = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'argus-run', 'verdict-history.json');
+        const hit = await cache.restoreCache([file], `${key}-primary`, [key]);
+        if (!hit) return null;
+        try {
+          return JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch {
+          return null;
+        }
+      },
+      save: async (key, value) => {
+        const file = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'argus-run', 'verdict-history.json');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(value));
+        // actions/cache keys are immutable per run: append the run id so every
+        // run persists its own history snapshot.
+        const runId = github.context.runId ? String(github.context.runId) : String(Date.now());
+        await cache.saveCache([file], `${key}-${runId}`);
       },
     },
   };

@@ -15,8 +15,9 @@ import { loadSutContract, EXAMPLE_SUT, type SutContract } from './sut-contract';
 import { BillingError, downloadBundle, fetchBundleMeta, registerRun, type RunPayload } from './console-client';
 import { gateResult } from './result-gate';
 import { checkRunName, conclusionFor, evidenceFiles, idempotencyKeyFor, sessionAnnotations } from './render';
+import { driftAnnotations, deltaOf, driftSummaryLines, flakyIdsOf, HISTORY_LIMIT, type DriftEntry, type HistoryEntry, verdictMapOf } from './delta';
 import { renderBillingSummary, renderComment, renderOnboardingSummary, renderSealFailureSummary, renderSummary } from './summary';
-import type { ArgusResult, Conclusion, Outcome, Ports } from './types';
+import type { Annotation, ArgusResult, Conclusion, Outcome, Ports, SessionVerdict } from './types';
 
 const CI_LOCAL_NOTICE = 'ci-local run — evidence: ledgers attached; not a registry seal';
 const DOCS_URL = 'https://argus-lab.tech/docs/result-contract-v0';
@@ -289,13 +290,15 @@ export async function runArgus(ports: Ports): Promise<Outcome> {
     ports.outputs.set('run-url', runUrl);
   } catch (err) {
     if (err instanceof BillingError) {
+      // Contract semantics (result-contract-v0): the agent was not measured, so
+      // this must NOT read as a red agent failure — action_required, not failure.
       ports.log(`billing: ${String(err)}`);
       ports.annotate({ level: 'error', title: 'Argus billing', message: `${String(err)} · top-up at ${String(err.body.topup_url)}` });
       ports.summary.add(renderBillingSummary(err.body));
       await ports.summary.write();
       await ports.artifacts.upload([path.join(paths.workspace, 'argus-result.json'), ...evidenceFiles(result).map((p) => path.resolve(paths.workspace, p))], paths.workspace);
-      await ports.conclusion('failure');
-      return { conclusion: 'failure', rollup: result.rollup, engineVersion: manifest.engine_version };
+      await ports.conclusion('action_required');
+      return { conclusion: 'action_required', rollup: result.rollup, engineVersion: manifest.engine_version };
     }
     ports.log(`run registration failed: ${String(err)}`);
     ports.annotate({ level: 'error', title: 'run registration', message: String(err) });
@@ -307,7 +310,47 @@ export async function runArgus(ports: Ports): Promise<Outcome> {
   const resultPath = path.join(paths.workspace, 'argus-result.json');
   fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
 
-  for (const a of sessionAnnotations(result.verdicts, runUrl)) ports.annotate(a);
+  // ---- 9a. P1-6: drift vs baseline fixture + flaky over verdict history ----
+  let driftExtras: Annotation[] = [];
+  let driftLines: string[] = [];
+  try {
+    const baselinePath = inputs.baselineFixture ? path.resolve(paths.repoRoot, inputs.baselineFixture) : '';
+    let baselineVerdicts: Record<string, string> | null = null;
+    if (baselinePath && fs.existsSync(baselinePath)) {
+      const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+      baselineVerdicts = verdictMapOf(baseline.verdicts);
+    }
+    const comparable = baselineVerdicts !== null;
+    let drift: DriftEntry[] = [];
+    if (comparable) {
+      drift = deltaOf(result.verdicts, baselineVerdicts).drift;
+    }
+    const historyKey = `argus-verdicts-${inputs.repo}-${battery}`;
+    let history: HistoryEntry[] = [];
+    if (ports.history) {
+      try {
+        history = ((await ports.history.load(historyKey)) as HistoryEntry[] | null) ?? [];
+      } catch (e) {
+        ports.log(`verdict history load skipped: ${String(e)}`);
+      }
+    }
+    const flaky = flakyIdsOf(history, result.verdicts);
+    if (comparable) driftExtras = driftAnnotations(drift, flaky);
+    else if (flaky.size) driftExtras = driftAnnotations([], flaky);
+    driftLines = driftSummaryLines(comparable, drift, flaky, inputs.baselineFixture ?? 'baseline');
+    if (ports.history && result.verdicts?.length) {
+      try {
+        const next: HistoryEntry[] = [...history, { commit: inputs.commit, verdicts: verdictMapOf(result.verdicts) }].slice(-HISTORY_LIMIT);
+        await ports.history.save(historyKey, next);
+      } catch (e) {
+        ports.log(`verdict history save skipped: ${String(e)}`);
+      }
+    }
+  } catch (e) {
+    ports.log(`drift/flaky skipped: ${String(e)}`);
+  }
+
+  for (const a of [...sessionAnnotations(result.verdicts, runUrl), ...driftExtras]) ports.annotate(a);
 
   ports.summary.add(
     renderSummary({
@@ -319,7 +362,7 @@ export async function runArgus(ports: Ports): Promise<Outcome> {
       runUrl,
       sessions: result.verdicts,
       durationMs: result.duration_ms,
-    }),
+    }) + (driftLines.length ? `\n${driftLines.join('\n')}` : ''),
   );
   await ports.summary.write();
 
@@ -350,7 +393,7 @@ export async function runArgus(ports: Ports): Promise<Outcome> {
           sessions: result.verdicts,
         }),
         detailsUrl: runUrl,
-        annotations: sessionAnnotations(result.verdicts, runUrl).slice(0, 50),
+        annotations: [...sessionAnnotations(result.verdicts, runUrl), ...driftExtras].slice(0, 50),
       });
     } catch (err) {
       ports.log(`check run skipped: ${String(err)}`);

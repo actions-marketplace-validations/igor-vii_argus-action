@@ -1,4 +1,5 @@
 import type { ArgusResult, Conclusion, Ports, SessionVerdict, Verdict } from './types';
+import { createHash } from 'node:crypto';
 import { CONCLUSION_MAP } from '../vendor/result-view.mjs';
 
 export function conclusionFor(rollup: Verdict): Conclusion {
@@ -36,7 +37,9 @@ export function checkRunName(battery: string): string {
 }
 
 export function idempotencyKeyFor(inputs: Ports['inputs']): string {
-  return `${inputs.repo}|${inputs.commit}|${inputs.battery ?? ''}`;
+  // Contract formula (api-contract-v0): one commit + one battery is one paid run.
+  // The repo is implied by the key/account scope, so it is not part of the hash.
+  return createHash('sha256').update(`argus.idem.v1:${inputs.commit}:${inputs.battery ?? ''}`).digest('hex');
 }
 
 export function evidenceFiles(result: ArgusResult): string[] {

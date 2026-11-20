@@ -64,6 +64,7 @@ export interface ActionInputs {
   bundleKeysPath: string;
   publicRun: boolean;
   comment: boolean;
+  baselineFixture?: string;
   repo: string;
   commit: string;
 }
@@ -89,6 +90,10 @@ export interface Ports {
   comments: null | { upsert: (marker: string, body: string) => Promise<void> };
   artifacts: { upload: (files: string[], rootDirectory: string) => Promise<void> };
   cache: null | { restore: (key: string, targetDir: string) => Promise<boolean>; save: (key: string, targetDir: string) => Promise<void> };
+  // P1-6: verdict history for drift/flaky, backed by the action cache.
+  // Key semantics: load/save append-only JSON of HistoryEntry[]; implementations
+  // must derive unique save keys (run id) internally.
+  history: null | { load: (key: string) => Promise<unknown | null>; save: (key: string, value: unknown) => Promise<void> };
 }
 
 export interface Outcome {
