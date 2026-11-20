@@ -192,6 +192,27 @@ describe('SUT contract validation', () => {
     }
   });
 
+  it('keeps every URL in the spec example off the fetch bad-port list', () => {
+    // Ports blocked by undici/Node fetch (WHATWG "bad port" list, bundled in
+    // dist) are rejected before a connection is even attempted. v2.1.1 shipped
+    // an example with FACILITATOR_URL on 5060/5061 (SIP/SIPS) — any SUT that
+    // copied it got a guaranteed `fetch failed: bad port`.
+    const badPorts = new Set([
+      1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101,
+      102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389,
+      427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636,
+      989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665,
+      6666, 6667, 6668, 6669, 6697, 10080,
+    ]);
+    const urls = [...EXAMPLE_SUT.matchAll(/https?:\/\/[^\s"]+/g)].map((m) => new URL(m[0]));
+    expect(urls.length).toBe(2); // ready.url + FACILITATOR_URL
+    for (const u of urls) {
+      expect(badPorts.has(Number(u.port))).toBe(false);
+    }
+    expect(EXAMPLE_SUT).not.toContain(':5060');
+    expect(EXAMPLE_SUT).not.toContain(':5061');
+  });
+
   it('flags a missing file as onboarding', () => {
     const res = loadSutContract(path.join(tmp, 'nope.json'));
     expect(res.ok).toBe(false);

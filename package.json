@@ -1,6 +1,6 @@
 {
   "name": "argus-action",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "private": true,
   "description": "Runs the real Argus engine (sealed bundle) against your SUT in CI.",
   "scripts": {

@@ -145902,12 +145902,12 @@ var require_cache4 = __commonJS({
 });
 
 // src/main.ts
-var core2 = __toESM(require_core(), 1);
+var core2 = __toESM(require_core());
 
 // src/lib/orchestrator.ts
 var import_node_child_process = require("node:child_process");
-var import_node_fs11 = __toESM(require("node:fs"), 1);
-var import_node_path11 = __toESM(require("node:path"), 1);
+var import_node_fs11 = __toESM(require("node:fs"));
+var import_node_path11 = __toESM(require("node:path"));
 
 // node_modules/tar/dist/esm/index.min.js
 var import_events = __toESM(require("events"), 1);
@@ -148880,7 +148880,7 @@ var To = (s3) => {
 
 // src/lib/seal.ts
 var import_node_crypto2 = require("node:crypto");
-var import_node_fs7 = __toESM(require("node:fs"), 1);
+var import_node_fs7 = __toESM(require("node:fs"));
 
 // src/lib/canonical.ts
 function canonical(obj) {
@@ -148927,7 +148927,7 @@ function verifySeal(manifest, tarballPath, keys) {
 }
 
 // src/lib/sut-contract.ts
-var import_node_fs8 = __toESM(require("node:fs"), 1);
+var import_node_fs8 = __toESM(require("node:fs"));
 function loadSutContract(path4) {
   if (!import_node_fs8.default.existsSync(path4)) {
     return { ok: false, reason: `no argus.sut.json found at ${path4}`, missing: true };
@@ -148971,12 +148971,12 @@ var EXAMPLE_SUT = `{
   "schema": "argus.sut.v0",
   "start": "npm run start:sut",
   "ready": { "url": "http://127.0.0.1:5071/health", "timeout_ms": 30000 },
-  "env": { "PORT": "5071", "FACILITATOR_URL": "http://127.0.0.1:5060" },
+  "env": { "PORT": "5071", "FACILITATOR_URL": "http://127.0.0.1:5070" },
   "battery": "x402-core"
 }`;
 
 // src/lib/console-client.ts
-var import_node_fs9 = __toESM(require("node:fs"), 1);
+var import_node_fs9 = __toESM(require("node:fs"));
 var TIMEOUTS = {
   bundleMetaMs: 3e4,
   bundleDownloadMs: 12e4,
@@ -149712,12 +149712,12 @@ ${driftLines.join("\n")}` : "")
 }
 
 // src/github/ports.ts
-var core = __toESM(require_core(), 1);
-var github = __toESM(require_github(), 1);
-var artifact = __toESM(require_artifact2(), 1);
-var cache = __toESM(require_cache4(), 1);
-var import_node_fs12 = __toESM(require("node:fs"), 1);
-var import_node_path12 = __toESM(require("node:path"), 1);
+var core = __toESM(require_core());
+var github = __toESM(require_github());
+var artifact = __toESM(require_artifact2());
+var cache = __toESM(require_cache4());
+var import_node_fs12 = __toESM(require("node:fs"));
+var import_node_path12 = __toESM(require("node:path"));
 function withTimeout(p2, what) {
   return Promise.race([
     p2,
