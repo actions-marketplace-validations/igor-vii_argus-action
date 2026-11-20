@@ -1,0 +1,12 @@
+{
+  "schema": "argus.bundle-keys.v0",
+  "keys": [
+    {
+      "key_id": "bundle-test-1",
+      "algorithm": "Ed25519",
+      "public_key_b64": "MCowBQYDK2VwAyEA25Jcjo011U7glxITSBbiFXkTnBgRpkFwYbIkmICQ+KE=",
+      "created_at": "2026-11-20T04:19:41.041Z",
+      "status": "active"
+    }
+  ]
+}

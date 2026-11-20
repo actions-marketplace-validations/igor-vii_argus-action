@@ -1,0 +1,27 @@
+{
+  "name": "argus-action",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runs the real Argus engine (sealed bundle) against your SUT in CI.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "check:language": "node scripts/check-language.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/artifact": "^2.3.2",
+    "@actions/cache": "^4.0.3",
+    "@actions/core": "^1.11.1",
+    "@actions/exec": "^1.1.1",
+    "@actions/github": "^6.0.1",
+    "tar": "^7.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}
