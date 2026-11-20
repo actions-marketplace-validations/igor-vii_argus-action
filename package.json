@@ -1,8 +1,7 @@
 {
   "name": "argus-action",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
-  "type": "module",
   "description": "Runs the real Argus engine (sealed bundle) against your SUT in CI.",
   "scripts": {
     "build": "node build.mjs",
