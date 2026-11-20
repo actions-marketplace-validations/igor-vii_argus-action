@@ -1,139 +1,164 @@
-# Argus battery — GitHub Action
+# Argus Action
 
-**Black-box x402 payment battery for AI agents, right in your CI.** On every
-push (or PR, or schedule) this Action submits your commit to the Argus
-console, runs the seeded failure battery against the canonical payment
-scenarios, and records the verdict as a **check run** on the commit — with
-the full machine-readable result pinned as `argus-result.json`.
+Runs the **real Argus engine** (delivered as a sealed, signed bundle) against
+your SUT in CI: **real protocol sessions, real refusal points**. No mocks, no
+stub traffic — the engine drives your system under test over `127.0.0.1`,
+records JSONL ledgers and issues registry-verdicts (`PASS` / `FAIL` /
+`DOCUMENTED` / `HARNESS_ERROR`).
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+## What it does, in order
 
-> **Test whether AI agents behave correctly when the world goes wrong.**
-> Argus is an independent black-box testing laboratory for agentic payment
-> rails: duplicate requests, payment-before-execution, crash after
-> settlement, concurrent duplicates, retries, lost delivery, budget
-> policy probes.
+1. Reads `argus.sut.json` (missing or invalid → `action_required` + onboarding
+   example in the step summary).
+2. Fetches the sealed engine bundle from the console:
+   `GET /api/v1/engine/bundle?battery=<id>` → `302` signed URL (TTL 10 min),
+   `X-Argus-Engine-Version` header. Bundle caching via `@actions/cache` keyed
+   by `argus-engine-<version>`.
+3. Verifies the seal **locally**: manifest schema → `key_id` against the lab
+   public keys → Ed25519 signature over the canonical manifest →
+   `tree_sha256` of the tarball. A broken seal means `action_required` and
+   **zero execution**.
+4. Extracts the bundle, spawns your SUT, waits for the readiness endpoint,
+   then runs the engine: the facilitator counterpart is raised from the
+   bundle, real sessions run against your SUT, JSONL ledgers land in the
+   workspace, bundle matchers produce verdicts.
+5. Validates the engine result client-side (vendored `result-view.mjs`:
+   schema, rollup rules, evidence paths, seal invariants).
+6. Registers the run with the console (**idempotent debit**: one commit + one
+   battery = one charge; job restarts never debit twice). Zero balance →
+   `402` + top-up messaging.
+7. Renders everything: annotations per session, `GITHUB_STEP_SUMMARY`
+   markdown table, `argus-evidence` artifact (`argus-result.json` + ledgers),
+   the `argus-battery (<battery>) by Argus Lab` check run, and — opt-in — a
+   single PR comment that updates on re-runs.
 
-## What it does
+## Scenario families (lab registry)
 
-1. `POST /api/v1/runs` with your commit SHA (`docs/ci/api-contract-v0.md`).
-2. The console debits **1 run** from your account and executes the battery
-   with a **commit-derived seed**:
-   `sha256("argus.seed.v1:" + commit_sha + ":" + battery.id)`.
-3. The full `argus.result.v0` object (`docs/ci/result-contract-v0.md`) is
-   written to `argus-result.json` and rendered as a check run:
-   `argus-battery (<battery-id>)`.
+| Alias | Family | Argus plays | Your SUT is | Sessions |
+| --- | --- | --- | --- | --- |
+| s9 | **BC** | bad client / buyer | seller (default) | 9 |
+| s8 | **S-BS** | bad service / seller | buyer (`role: "client"`) | 6 |
+| s1–s7 | facilitator / orchestrator family | — | — | hosted Block B only |
 
-**Idempotent by design:** re-running the same commit with the same battery
-is free — you get the original verdict back (`409` + replay header), so
-"rerun until green" is impossible. Variance across commits is intentional:
-it measures your agent's drift, not engine noise.
+A correct SUT still shows `DOCUMENTED` on refusal probes — that is by design:
+`DOCUMENTED` is evidence, not failure. A resource served despite an invalid
+payment is always `FAIL`.
 
-## Quick start
+## Usage
 
 ```yaml
-name: argus-battery
-on: [push]
-
-jobs:
-  argus:
-    runs-on: ubuntu-latest
-    permissions:
-      checks: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: igor-vii/argus-action@v1
-        with:
-          api-key: ${{ secrets.ARGUS_API_KEY }}
+- uses: argus-lab/argus-action@v2
+  with:
+    console-url: https://argus-lab.tech
+    console-api-key: ${{ secrets.ARGUS_API_KEY }}
+    public-run: true        # publish the run report page
+    comment: false          # opt-in PR comment
 ```
 
-Store the key once: **console → Billing → CI api-key → Issue → copy**, then
-`Settings → Secrets and variables → Actions → New repository secret` → name
-it `ARGUS_API_KEY`. Never inline the key.
+### Inputs
 
-## Inputs
-
-| Input | Required | Default | Description |
-| --- | --- | --- | --- |
-| `api-key` | **yes** | — | Argus console api-key. Pass `${{ secrets.ARGUS_API_KEY }}`, never a literal. |
-| `battery-id` | no | `x402-core` | `x402-core` (9 scenarios: duplicate request, payment before execution, crash after settlement, concurrent duplicate, retry, lost delivery, canonical x402 flow, fiat lost response, fiat over-budget), `client-standard` / `client-engine` (canonical S8 + S10/S11). |
-| `console-url` | no | `https://console.argus-lab.tech` | Self-hosting the console? Point this at your base URL. |
-
-## Outputs
-
-- **Check run** `argus-battery (<battery-id>)` on the pushed commit — the
-  verdict signal lives here, not in the job status.
-- **`argus-result.json`** artifact file in the workspace: the complete
-  `argus.result.v0` object — per-scenario verdicts, evidence hashes, the
-  seed, the rollup.
-
-### Conclusion mapping
-
-| Situation | Check conclusion | Job exit |
+| input | default | description |
 | --- | --- | --- |
-| All scenarios PASS | `success` | 0 |
-| Any scenario FAIL | `failure` | 0 (job green — the signal is the check) |
-| UNKNOWN / HOLD present, no FAIL | `neutral` | 0 |
-| No balance (`402`) | `action_required` + annotation | 1 |
-| Invalid api-key (`401`) | `action_required` + annotation | 1 |
-| Rig failure (`5xx`) | `action_required` + annotation | 1 |
+| `console-url` | — (required) | Argus console base URL |
+| `console-api-key` | — (required) | Argus API key (one key, one balance) |
+| `battery` | from `argus.sut.json` | battery id override |
+| `sut-contract-path` | `argus.sut.json` | SUT contract location |
+| `bundle-keys-path` | bundled with the action | override for bundle public keys — **never from the SUT repo** (see Security model) |
+| `public-run` | `false` | publish the `/runs/<id>` report page |
+| `comment` | `false` | post/update a single PR comment with the session table |
+| `baseline-fixture` | — | repo-relative path to a previous `argus-result.json` — enables drift annotations (P1-6) |
+| `github-token` | `github.token` | token for the check-run billboard and the comment |
 
-A FAIL is a **delivered product**: the battery ran and found something. A
-`402`/`401`/`5xx` means your agent was **not measured at all** — that is why
-it maps to `action_required`, never to a red agent verdict.
+### Outputs
 
-## Billing, in one paragraph
+`run-id`, `run-url`, `rollup`, `engine-version`.
 
-One api-key per account, one shared balance. Each unique
-`(commit_sha, battery_id)` pair debits 1 run **before** execution; replays
-are free; the quota is refunded automatically if the rig fails (a FAIL
-verdict is not a rig failure — the battery ran, the agent lost). The balance
-may dip to −3 (advisory overdraft floor) so a zeroed balance never
-hard-breaks a live pipeline mid-day; below the floor the Action stops with
-`action_required` and a top-up link. Balance and debit history live in the
-console Billing tab.
+## SUT contract (`argus.sut.json`)
 
-## Simulation honesty (non-negotiable)
+```json
+{
+  "schema": "argus.sut.v0",
+  "start": "npm run start:sut",
+  "ready": { "url": "http://127.0.0.1:5071/health", "timeout_ms": 30000 },
+  "env": { "PORT": "5071", "FACILITATOR_URL": "http://127.0.0.1:5060" },
+  "battery": "x402-core"
+}
+```
 
-> *Simulation replays x402 scenario variants per the protocol spec without
-> executing the agent under test. Results may vary across runs for the same
-> agent — each run samples the scenario space. Not live traffic; not
-> citable as evidence; not an audit or compliance attestation.*
+v0.1 extensions (backward compatible, optional): `role` (`seller` | `client`),
+`payment.rail` (`local`; `base-sepolia` is planned — the engine rejects it in
+ci-local runs with a clear HARNESS_ERROR until the on-chain CI wiring lands),
+`env.SELLER_URL` (required for `role: "client"`).
 
-The CI battery is a seeded simulation against mock targets — it never sends
-traffic to your endpoint. Run results carry the `SIMULATION` marker in the
-console and the `mode: "simulation"` + disclaimer in the result object.
-Live-traffic batteries are a lab-assisted service, not a CI feature.
+## Verdict semantics
 
-## FAQ
+| verdict | conclusion | annotation |
+| --- | --- | --- |
+| `PASS` | success | — |
+| `FAIL` | failure | error |
+| `DOCUMENTED` | neutral | warning (refusal code) |
+| `HARNESS_ERROR` | action_required | error |
 
-**Why is my job green but the check red?** Exit codes and check conclusions
-are different layers by contract. The job stays green for PASS/UNKNOWN so a
-neutral observation does not fail your build; the check carries the signal.
-Red job = infrastructure problem (key/balance/rig), red check = finding.
+`rollup` = max severity. The job exit status approximates the mapping
+(failure on `FAIL`); the authoritative conclusion lives on the Argus
+check run. Billing/rig/contract problems (402, unreachable console, broken
+seal, missing contract) conclude `action_required` — the agent was not
+measured, so it must not read as a red agent failure — while the workflow
+step still exits non-zero so the pipeline does not pretend all is fine.
 
-**Is the same commit really free to re-run?** Yes — the idempotency key is
-derived from the commit and battery; the console returns the stored verdict
-with `X-Argus-Replayed: 1`. A different commit is a new, paid, seed-different
-run.
+## Drift and flaky (P1-6)
 
-**Can I use my own console?** Pass `console-url`. Your console must run the
-engine (`ARGUS_ENGINE_DIR`); engine-less hosts answer `503
-engine_not_configured` and the Action reports `action_required`.
+Pass `baseline-fixture: path/to/previous-argus-result.json` and the action
+annotates every session whose verdict changed vs that run (`drift: bc-03
+PASS → FAIL (worse)`). Separately, the action keeps the last 20 verdict
+maps per repo+battery in the Actions cache: a session that flapped ≥ 3 times
+is annotated `flaky` and gets a `flaky` marker in the summary drift table.
 
-**Does this replace my functional tests?** No — it attacks the failure
-boundaries happy-path tests miss: duplicates, crashes after settlement,
-timeouts, ambiguous delivery, budget policy.
+## Security model
 
-## Source of truth & sync
+| | seal-key | bundle-key |
+| --- | --- | --- |
+| signs | verdicts → registry seals | engine bundles |
+| storage | offline, maintainer-only | closed-repo Actions secrets |
+| mode | manual, one at a time | automatic, every build |
+| leak | catastrophic (registry forgery) | rotate, registry unaffected |
 
-The reference implementation lives in the public lab repo at
-[`igor-vii/Argus-Agent-Test-Lab/action`](https://github.com/igor-vii/Argus-Agent-Test-Lab/tree/main/action)
-(together with the contract docs and the result validator). This repository
-mirrors it for Marketplace discoverability; contract changes ship as
-ordinary commits to the lab repo first, then land here in a new release.
+The action never sees any private key. **The bundle public keys are pinned
+inside the action** (`keys/bundle-keys.json`, committed at the action version)
+and verified locally. A keys file from the SUT repo must never be used as the
+trust root: an untrusted PR could swap it and verify an attacker-signed bundle
+on your runner. `manifest.key_id` selects the verification key. Seal policy:
+the registry is appended only with manually reviewed, offline-signed live
+runs — CI and console runs are never sealed automatically; `seal-eligible`
+marks a candidate, not a seal.
 
-## License
+## Billing
 
-[MIT](LICENSE) — © 2026 igor-vii
+- 3 welcome runs free (CI + console share one balance — one key, one balance).
+- $3 per core battery run; $29 per 30-run package (credits do not expire).
+- Idempotent debits: `idempotency_key = sha256("argus.idem.v1:" + commit + ":" + battery)`
+  per api-contract-v0 — one commit + one battery = one charge per account,
+  restarts are free; replays are scoped per-account.
+- Zero balance → `402` + explicit top-up messaging; overdraft floor −3 per
+  contract. No silent charges: the first paid run shows the price and balance.
+
+## Timeouts (P0-4)
+
+Console/bundle endpoints 30 s and 120 s (`AbortSignal.timeout`); Checks API
+and other GitHub calls 10 s.
+
+## Local development
+
+```bash
+npm ci
+npm run build          # esbuild -> dist/index.js (committed)
+npm run typecheck
+npm test               # unit (24) + e2e (12 scenarios A–J)
+npm run check:language # zero mentions of the retired mode in live paths
+```
+
+The e2e suite boots the mock console, builds a genuinely sealed bundle via the
+CI packer (Ed25519), generates the tamper matrix and runs the orchestrator
+against the lab demo SUT (seller role) and demo buyer (client role).
+
+Contract reference: `docs/result-contract-v0.md` in the lab repo.
