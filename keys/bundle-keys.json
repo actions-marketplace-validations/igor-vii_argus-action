@@ -6,6 +6,13 @@
       "algorithm": "Ed25519",
       "public_key_b64": "MCowBQYDK2VwAyEA25Jcjo011U7glxITSBbiFXkTnBgRpkFwYbIkmICQ+KE=",
       "created_at": "2026-11-20T04:19:41.041Z",
+      "status": "retired"
+    },
+    {
+      "key_id": "bundle-2026q4",
+      "algorithm": "Ed25519",
+      "public_key_b64": "MCowBQYDK2VwAyEAhfv50RgG57rPD+Ra1aN3bYhfmR7nPOYOVrQMVJ1FVFY=",
+      "created_at": "2026-11-20T00:00:00.000Z",
       "status": "active"
     }
   ]
